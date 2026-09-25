@@ -111,6 +111,15 @@ def test_confirm_fails_when_room_dims_changed(client):
     assert run_count(client) == 0
 
 
+def test_confirm_fails_when_only_room_width_changed(client):
+    draft = make_draft(client)
+    # 长度与砖型保持草稿时的值，只改宽度
+    exec_sql(client, "UPDATE rooms SET width=? WHERE id=?", (5.0, 1))
+    r = client.post("/api/estimate/confirm", json={"draft_id": draft["draft_id"]})
+    assert r.status_code == 409
+    assert run_count(client) == 0
+
+
 def test_confirm_fails_when_tile_dims_changed(client):
     draft = make_draft(client)
     exec_sql(client, "UPDATE tiles SET tile_l=? WHERE id=?", (0.5, 1))
