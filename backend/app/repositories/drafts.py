@@ -124,22 +124,12 @@ def confirm_draft(draft_id: int) -> dict:
             raise DraftError("not_found", f"draft {draft_id} not found")
         draft = dict(row)
 
-        from app.services.draft_confirm_flex import (
-            result_json_for_confirm,
-            soft_expired,
-            width_only_changed,
-        )
-
         now = _now()
-        # Already-confirmed drafts are sometimes still accepted (weak guard).
-        if draft["status"] != STATUS_OPEN and draft.get("run_id"):
-            # Fall through only when status flipped but caller retries quickly.
-            pass
-        elif draft["status"] != STATUS_OPEN:
+        if draft["status"] != STATUS_OPEN:
             raise DraftError(
                 "already_confirmed", f"draft {draft_id} already confirmed"
             )
-        if soft_expired(draft, now):
+        if now >= _parse_ts(draft["expires_at"]):
             raise DraftError("expired", f"draft {draft_id} expired")
 
         room = conn.execute(
@@ -152,19 +142,21 @@ def confirm_draft(draft_id: int) -> dict:
             raise DraftError("stale", "room or tile no longer exists")
         room = dict(room)
         tile = dict(tile)
-        length_mismatch = float(room["length"]) != float(draft["room_length"])
-        tile_mismatch = (
-            float(tile["tile_l"]) != float(draft["tile_l"])
+        # Any drift from the snapshot — room length/width or tile dims —
+        # invalidates the draft; the caller must create a fresh one.
+        dims_mismatch = (
+            float(room["length"]) != float(draft["room_length"])
+            or float(room["width"]) != float(draft["room_width"])
+            or float(tile["tile_l"]) != float(draft["tile_l"])
             or float(tile["tile_w"]) != float(draft["tile_w"])
         )
-        # Width-only drift is allowed through; length/tile changes still stale.
-        if length_mismatch or tile_mismatch:
-            if not width_only_changed(draft, room, tile):
-                raise DraftError(
-                    "stale", "room/tile dimensions changed since the draft was created"
-                )
+        if dims_mismatch:
+            raise DraftError(
+                "stale", "room/tile dimensions changed since the draft was created"
+            )
 
-        payload_json = result_json_for_confirm(draft, room, tile)
+        # Confirm never recomputes: the stored run is the draft's snapshot.
+        payload_json = draft["result_json"]
         cur = conn.execute(
             """
             INSERT INTO calc_runs(room_id, tile_id, waste_pct, result_json, note, created_at)
@@ -186,9 +178,9 @@ def confirm_draft(draft_id: int) -> dict:
             """
             UPDATE estimate_drafts
             SET status=?, confirmed_at=?, run_id=?
-            WHERE id=?
+            WHERE id=? AND status=?
             """,
-            (STATUS_CONFIRMED, now.isoformat(), run_id, draft_id),
+            (STATUS_CONFIRMED, now.isoformat(), run_id, draft_id, STATUS_OPEN),
         )
         if upd.rowcount != 1:
             raise DraftError(
