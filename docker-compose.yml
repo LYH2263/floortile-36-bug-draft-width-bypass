@@ -1,0 +1,17 @@
+services:
+  backend:
+    build: ./backend
+    ports:
+      - "9600:9600"
+    volumes:
+      - floortile_data:/data
+    environment:
+      DATA_DIR: /data
+  frontend:
+    build: ./frontend
+    ports:
+      - "4600:80"
+    depends_on:
+      - backend
+volumes:
+  floortile_data:
